@@ -1,0 +1,12 @@
+# OS metadata
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# IDE / Editor files
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log

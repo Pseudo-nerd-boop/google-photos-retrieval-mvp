@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Search Recovery Assistant</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#fff;--fg:#1a1a1a;--mut:#5c5c5c;--card:#f4f5f7;--bd:#d0d3d9;--a:#0b5cad;--ok:#0a7a4b}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#16181c;--fg:#eee;--mut:#a6abb3;--card:#22252b;--bd:#3a3e46;--a:#6db3f2;--ok:#5fd6a1}}
+:root[data-theme="dark"]{--bg:#16181c;--fg:#eee;--mut:#a6abb3;--card:#22252b;--bd:#3a3e46;--a:#6db3f2;--ok:#5fd6a1}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:720px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:0 0 4px}h2{font-size:16px;margin:0 0 6px}p{margin:0 0 10px}.m{color:var(--mut);font-size:15px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:12px;margin:10px 0}
+textarea{width:100%;box-sizing:border-box;min-height:80px;font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:10px}
+button{font:inherit;cursor:pointer;color:var(--fg);background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:8px 14px;margin:4px 6px 4px 0}
+button.p{background:var(--a);color:var(--bg);border-color:var(--a);font-weight:600}
+.q{display:block;font-family:ui-monospace,Menlo,monospace;background:var(--bg);border:1px dashed var(--a);border-radius:8px;padding:8px 10px;margin:6px 0;word-break:break-word}
+.tag{display:inline-block;border:1px solid var(--a);color:var(--a);border-radius:99px;padding:1px 10px;margin:2px 4px 2px 0;font-size:15px}
+.ok{color:var(--ok);font-weight:700}.w{font-weight:600}
+</style></head><body><main>
+<h1>Search Recovery Assistant</h1>
+<p class="m">Prototype. Use it <b>alongside your own Google Photos</b>. Describe a photo you half-remember. It reads your clues, tells you what to search, and when a search misses it works out what to try next.</p>
+<div id="app"></div>
+<script>
+const $=s=>document.querySelector(s),esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let S={mem:"",clues:null,first:"",att:[],cur:null,done:false,ai:null,busy:false,err:""};
+const STOP=/\b(a|an|the|of|from|my|me|i|in|on|at|during|with|photo|picture|pic|of|was|were|that|where|when|trip|taken)\b/g;
+const OUT={many:"Too many results",wrong:"Wrong people or things",none:"Nothing came up",stuck:"Results look right but I can't tell which",found:"Found it!"};
+async function ai(prompt){try{const s=await claude.use("sample");if(!s)return null;return await s.json(prompt,{cache:false})}catch(e){return null}}
+function fbClues(t){const q=t.toLowerCase().replace(STOP," ").replace(/\s+/g," ").trim().split(" ").filter(w=>w.length>2);return{people:"",activity:"",place:"",context:"",time:"unknown",text:"",first_search:q.slice(0,3).join(" ")||t}}
+async function understand(){const t=$("#mem").value.trim();if(!t)return;S={mem:t,clues:null,first:"",att:[],cur:null,done:false,ai:null,busy:true,err:""};draw();
+ const r=await ai(`A user half-remembers a photo in Google Photos and describes it: "${t.replace(/"/g,"'")}". Extract what they remember. Return JSON only: {"people":"","activity":"","place":"","context":"","time":"unknown or what they said","text":"visible text if any","first_search":"a SHORT 2-3 word query using only the most distinctive clues; broad is fine"}. Use empty string when not mentioned.`);
+ S.ai=!!r;S.clues=r||fbClues(t);S.first=S.clues.first_search||t;S.busy=false;draw()}
+async function report(o){if(o==="found"){S.att.push({q:S.first,o});S.done=true;draw();return}
+ S.att.push({q:S.first,o});S.busy=true;draw();
+ const prev=S.att.map(a=>`"${a.q}" -> ${OUT[a.o]}`).join("; ");
+ const r=await ai(`A user is searching their own Google Photos for a half-remembered photo: "${S.mem.replace(/"/g,"'")}". Clues understood: ${JSON.stringify(S.clues)}. Attempts so far: ${prev}. Diagnose what likely went wrong and give up to 3 DIFFERENT next steps that use only their own clues and never repeat an earlier query. Only refer to these places: "Search bar","People & pets","Screenshots or a category","Timeline / jump to a year". Return JSON only: {"diagnosis":"one plain sentence","steps":[{"action":"what to do","where":"one of the places","query":"exact text to type, or empty"}]}`);
+ S.cur=r&&r.steps?r:fbNext(o);S.err="";S.busy=false;S.first=(S.cur.steps[0]&&S.cur.steps[0].query)||S.first;draw()}
+function fbNext(o){const c=S.clues||{};const add=[c.place,c.people,c.activity,c.context].filter(Boolean);const base=S.first;
+ const M={many:{d:"Your search is too broad, so many photos match.",s:[{action:"Add one more clue to narrow it",where:"Search bar",query:(base+" "+(add[0]||"")).trim()},{action:"Jump to the year you think it was and scan from there",where:"Timeline / jump to a year",query:""}]},
+ wrong:{d:"The search matched the wrong things or people.",s:[{action:"Try the person instead of a keyword",where:"People & pets",query:""},{action:"Use a different word for the same thing",where:"Search bar",query:add[0]||base}]},
+ none:{d:"Too many clues in one search can return nothing.",s:[{action:"Search with just your single strongest clue",where:"Search bar",query:add[0]||base.split(" ")[0]},{action:"Look in a category",where:"Screenshots or a category",query:""}]},
+ stuck:{d:"The right photo may be in the results but hard to spot.",s:[{action:"Narrow to a likely year, then scan",where:"Timeline / jump to a year",query:""},{action:"Add a place or person clue",where:"Search bar",query:(base+" "+(add[0]||"")).trim()}]}};
+ return{diagnosis:M[o].d,steps:M[o].s}}
+function summary(){return`Memory: ${S.mem}\nUnderstood: ${JSON.stringify(S.clues)}\nMode: ${S.ai?"AI":"fallback"}\nAttempts:\n`+S.att.map((a,i)=>`${i+1}. "${a.q}" -> ${OUT[a.o]}`).join("\n")+`\nRecovered: ${S.done?"yes, after "+(S.att.length-1)+" recovery step(s)":"no"}`}
+function draw(){let h="";
+ h+=`<div class="card"><h2>1. What do you remember?</h2><textarea id="mem" placeholder="e.g. me riding a bicycle on a trip, don't remember when">${esc(S.mem)}</textarea><button class="p" onclick="understand()" ${S.busy?"disabled":""}>${S.busy&&!S.clues?"Reading…":"Understand my memory"}</button></div>`;
+ if(S.clues){const c=S.clues;h+=`<div class="card"><h2>2. What I understood</h2>${[["people","Who"],["activity","Doing"],["place","Where"],["context","Context"],["time","When"],["text","Text"]].filter(k=>c[k[0]]).map(k=>`<span class="tag">${k[1]}: ${esc(c[k[0]])}</span>`).join("")||'<span class="m">Keyword mode: no structured clues, using your words.</span>'}
+ <p class="m">${S.ai?"Read by AI.":"AI not available in this view, so a basic keyword fallback was used."}</p></div>`;
+ if(!S.done){h+=`<div class="card"><h2>${S.att.length?"3. Try this next":"3. Search this in Google Photos"}</h2>${S.cur?`<p class="w">${esc(S.cur.diagnosis)}</p>${S.cur.steps.map(s=>`<p><b>${esc(s.action)}</b> <span class="m">(${esc(s.where)})</span>${s.query?`<span class="q">${esc(s.query)}</span>`:""}</p>`).join("")}`:`<span class="q">${esc(S.first)}</span><p class="m">Type this into the search bar in your own Google Photos.</p>`}
+ <h2 style="margin-top:12px">How did it go?</h2>${Object.entries(OUT).map(([k,v])=>`<button ${k==="found"?'class="p"':""} onclick="report('${k}')" ${S.busy?"disabled":""}>${v}</button>`).join("")}${S.busy&&S.clues&&S.att.length?'<p class="m">Working out what to try next…</p>':""}</div>`}
+ if(S.att.length){h+=`<div class="card"><h2>Attempts so far</h2>${S.att.map((a,i)=>`<p class="m">${i+1}. "${esc(a.q)}" → ${OUT[a.o]}</p>`).join("")}</div>`}
+ if(S.done){h+=`<div class="card"><p class="ok">Found it after ${S.att.length-1} recovery step${S.att.length-1===1?"":"s"}.</p><p class="m">Researcher: copy this session log.</p><textarea readonly onclick="this.select()">${esc(summary())}</textarea><button class="p" onclick="S={mem:'',clues:null,first:'',att:[],cur:null,done:false,ai:null,busy:false,err:''};draw()">Try another photo</button></div>`}}
+ $("#app").innerHTML=h}
+draw();
+</script></main></body></html>
