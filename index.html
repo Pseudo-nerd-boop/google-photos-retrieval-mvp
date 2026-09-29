@@ -1,56 +1,1030 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Search Recovery Assistant</title>
-<style>
-:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#fff;--fg:#1a1a1a;--mut:#5c5c5c;--card:#f4f5f7;--bd:#d0d3d9;--a:#0b5cad;--ok:#0a7a4b}
-@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#16181c;--fg:#eee;--mut:#a6abb3;--card:#22252b;--bd:#3a3e46;--a:#6db3f2;--ok:#5fd6a1}}
-:root[data-theme="dark"]{--bg:#16181c;--fg:#eee;--mut:#a6abb3;--card:#22252b;--bd:#3a3e46;--a:#6db3f2;--ok:#5fd6a1}
-html{scroll-padding-top:env(safe-area-inset-top,0px)}
-body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-main{max-width:720px;margin:0 auto;padding:16px}
-h1{font-size:22px;margin:0 0 4px}h2{font-size:16px;margin:0 0 6px}p{margin:0 0 10px}.m{color:var(--mut);font-size:15px}
-.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:12px;margin:10px 0}
-textarea{width:100%;box-sizing:border-box;min-height:80px;font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:10px}
-button{font:inherit;cursor:pointer;color:var(--fg);background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:8px 14px;margin:4px 6px 4px 0}
-button.p{background:var(--a);color:var(--bg);border-color:var(--a);font-weight:600}
-.q{display:block;font-family:ui-monospace,Menlo,monospace;background:var(--bg);border:1px dashed var(--a);border-radius:8px;padding:8px 10px;margin:6px 0;word-break:break-word}
-.tag{display:inline-block;border:1px solid var(--a);color:var(--a);border-radius:99px;padding:1px 10px;margin:2px 4px 2px 0;font-size:15px}
-.ok{color:var(--ok);font-weight:700}.w{font-weight:600}
-</style></head><body><main>
-<h1>Search Recovery Assistant</h1>
-<p class="m">Prototype. Use it <b>alongside your own Google Photos</b>. Describe a photo you half-remember. It reads your clues, tells you what to search, and when a search misses it works out what to try next.</p>
-<div id="app"></div>
-<script>
-const $=s=>document.querySelector(s),esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-let S={mem:"",clues:null,first:"",att:[],cur:null,done:false,ai:null,busy:false,err:""};
-const STOP=/\b(a|an|the|of|from|my|me|i|in|on|at|during|with|photo|picture|pic|of|was|were|that|where|when|trip|taken)\b/g;
-const OUT={many:"Too many results",wrong:"Wrong people or things",none:"Nothing came up",stuck:"Results look right but I can't tell which",found:"Found it!"};
-async function ai(prompt){try{const s=await claude.use("sample");if(!s)return null;return await s.json(prompt,{cache:false})}catch(e){return null}}
-function fbClues(t){const q=t.toLowerCase().replace(STOP," ").replace(/\s+/g," ").trim().split(" ").filter(w=>w.length>2);return{people:"",activity:"",place:"",context:"",time:"unknown",text:"",first_search:q.slice(0,3).join(" ")||t}}
-async function understand(){const t=$("#mem").value.trim();if(!t)return;S={mem:t,clues:null,first:"",att:[],cur:null,done:false,ai:null,busy:true,err:""};draw();
- const r=await ai(`A user half-remembers a photo in Google Photos and describes it: "${t.replace(/"/g,"'")}". Extract what they remember. Return JSON only: {"people":"","activity":"","place":"","context":"","time":"unknown or what they said","text":"visible text if any","first_search":"a SHORT 2-3 word query using only the most distinctive clues; broad is fine"}. Use empty string when not mentioned.`);
- S.ai=!!r;S.clues=r||fbClues(t);S.first=S.clues.first_search||t;S.busy=false;draw()}
-async function report(o){if(o==="found"){S.att.push({q:S.first,o});S.done=true;draw();return}
- S.att.push({q:S.first,o});S.busy=true;draw();
- const prev=S.att.map(a=>`"${a.q}" -> ${OUT[a.o]}`).join("; ");
- const r=await ai(`A user is searching their own Google Photos for a half-remembered photo: "${S.mem.replace(/"/g,"'")}". Clues understood: ${JSON.stringify(S.clues)}. Attempts so far: ${prev}. Diagnose what likely went wrong and give up to 3 DIFFERENT next steps that use only their own clues and never repeat an earlier query. Only refer to these places: "Search bar","People & pets","Screenshots or a category","Timeline / jump to a year". Return JSON only: {"diagnosis":"one plain sentence","steps":[{"action":"what to do","where":"one of the places","query":"exact text to type, or empty"}]}`);
- S.cur=r&&r.steps?r:fbNext(o);S.err="";S.busy=false;S.first=(S.cur.steps[0]&&S.cur.steps[0].query)||S.first;draw()}
-function fbNext(o){const c=S.clues||{};const add=[c.place,c.people,c.activity,c.context].filter(Boolean);const base=S.first;
- const M={many:{d:"Your search is too broad, so many photos match.",s:[{action:"Add one more clue to narrow it",where:"Search bar",query:(base+" "+(add[0]||"")).trim()},{action:"Jump to the year you think it was and scan from there",where:"Timeline / jump to a year",query:""}]},
- wrong:{d:"The search matched the wrong things or people.",s:[{action:"Try the person instead of a keyword",where:"People & pets",query:""},{action:"Use a different word for the same thing",where:"Search bar",query:add[0]||base}]},
- none:{d:"Too many clues in one search can return nothing.",s:[{action:"Search with just your single strongest clue",where:"Search bar",query:add[0]||base.split(" ")[0]},{action:"Look in a category",where:"Screenshots or a category",query:""}]},
- stuck:{d:"The right photo may be in the results but hard to spot.",s:[{action:"Narrow to a likely year, then scan",where:"Timeline / jump to a year",query:""},{action:"Add a place or person clue",where:"Search bar",query:(base+" "+(add[0]||"")).trim()}]}};
- return{diagnosis:M[o].d,steps:M[o].s}}
-function summary(){return`Memory: ${S.mem}\nUnderstood: ${JSON.stringify(S.clues)}\nMode: ${S.ai?"AI":"fallback"}\nAttempts:\n`+S.att.map((a,i)=>`${i+1}. "${a.q}" -> ${OUT[a.o]}`).join("\n")+`\nRecovered: ${S.done?"yes, after "+(S.att.length-1)+" recovery step(s)":"no"}`}
-function draw(){let h="";
- h+=`<div class="card"><h2>1. What do you remember?</h2><textarea id="mem" placeholder="e.g. me riding a bicycle on a trip, don't remember when">${esc(S.mem)}</textarea><button class="p" onclick="understand()" ${S.busy?"disabled":""}>${S.busy&&!S.clues?"Reading…":"Understand my memory"}</button></div>`;
- if(S.clues){const c=S.clues;h+=`<div class="card"><h2>2. What I understood</h2>${[["people","Who"],["activity","Doing"],["place","Where"],["context","Context"],["time","When"],["text","Text"]].filter(k=>c[k[0]]).map(k=>`<span class="tag">${k[1]}: ${esc(c[k[0]])}</span>`).join("")||'<span class="m">Keyword mode: no structured clues, using your words.</span>'}
- <p class="m">${S.ai?"Read by AI.":"AI not available in this view, so a basic keyword fallback was used."}</p></div>`;
- if(!S.done){h+=`<div class="card"><h2>${S.att.length?"3. Try this next":"3. Search this in Google Photos"}</h2>${S.cur?`<p class="w">${esc(S.cur.diagnosis)}</p>${S.cur.steps.map(s=>`<p><b>${esc(s.action)}</b> <span class="m">(${esc(s.where)})</span>${s.query?`<span class="q">${esc(s.query)}</span>`:""}</p>`).join("")}`:`<span class="q">${esc(S.first)}</span><p class="m">Type this into the search bar in your own Google Photos.</p>`}
- <h2 style="margin-top:12px">How did it go?</h2>${Object.entries(OUT).map(([k,v])=>`<button ${k==="found"?'class="p"':""} onclick="report('${k}')" ${S.busy?"disabled":""}>${v}</button>`).join("")}${S.busy&&S.clues&&S.att.length?'<p class="m">Working out what to try next…</p>':""}</div>`}
- if(S.att.length){h+=`<div class="card"><h2>Attempts so far</h2>${S.att.map((a,i)=>`<p class="m">${i+1}. "${esc(a.q)}" → ${OUT[a.o]}</p>`).join("")}</div>`}
- if(S.done){h+=`<div class="card"><p class="ok">Found it after ${S.att.length-1} recovery step${S.att.length-1===1?"":"s"}.</p><p class="m">Researcher: copy this session log.</p><textarea readonly onclick="this.select()">${esc(summary())}</textarea><button class="p" onclick="S={mem:'',clues:null,first:'',att:[],cur:null,done:false,ai:null,busy:false,err:''};draw()">Try another photo</button></div>`}}
- $("#app").innerHTML=h}
-draw();
-</script></main></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Search Recovery Assistant — AI-Native MVP</title>
+  <style>
+    :root {
+      box-sizing: border-box;
+      --bg: #f8fafc;
+      --card-bg: #ffffff;
+      --fg: #0f172a;
+      --mut: #64748b;
+      --bd: #e2e8f0;
+      --accent: #2563eb;
+      --accent-hover: #1d4ed8;
+      --accent-light: #eff6ff;
+      --ok: #16a34a;
+      --ok-light: #f0fdf4;
+      --warn: #d97706;
+      --warn-light: #fffbeb;
+      --radius: 12px;
+      --font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #0f172a;
+        --card-bg: #1e293b;
+        --fg: #f8fafc;
+        --mut: #94a3b8;
+        --bd: #334155;
+        --accent: #3b82f6;
+        --accent-hover: #60a5fa;
+        --accent-light: #1e3a8a;
+        --ok: #22c55e;
+        --ok-light: #14532d;
+        --warn: #f59e0b;
+        --warn-light: #78350f;
+      }
+    }
+    :root[data-theme="dark"] {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --fg: #f8fafc;
+      --mut: #94a3b8;
+      --bd: #334155;
+      --accent: #3b82f6;
+      --accent-hover: #60a5fa;
+      --accent-light: #1e3a8a;
+      --ok: #22c55e;
+      --ok-light: #14532d;
+      --warn: #f59e0b;
+      --warn-light: #78350f;
+    }
+
+    *, *:before, *:after { box-sizing: inherit; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--font);
+      line-height: 1.5;
+      padding: 16px;
+    }
+    main {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    header {
+      margin-bottom: 20px;
+    }
+    h1 {
+      font-size: 1.5rem;
+      margin: 0 0 4px 0;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    p { margin: 0 0 12px 0; }
+    .subtitle { color: var(--mut); font-size: 0.95rem; }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--bd);
+      border-radius: var(--radius);
+      padding: 20px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+
+    .search-box {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    textarea {
+      width: 100%;
+      min-height: 90px;
+      padding: 12px;
+      font-family: inherit;
+      font-size: 1rem;
+      color: var(--fg);
+      background: var(--bg);
+      border: 1px solid var(--bd);
+      border-radius: 8px;
+      resize: vertical;
+    }
+    textarea:focus {
+      outline: 2px solid var(--accent);
+      border-color: transparent;
+    }
+
+    .preset-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+    .chip-label { font-size: 0.85rem; color: var(--mut); margin-right: 4px; }
+    .chip {
+      background: var(--bg);
+      border: 1px solid var(--bd);
+      border-radius: 99px;
+      padding: 4px 12px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      color: var(--fg);
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .chip:hover {
+      background: var(--accent-light);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      font-family: inherit;
+      font-size: 0.95rem;
+      font-weight: 600;
+      padding: 10px 18px;
+      border-radius: 8px;
+      border: 1px solid var(--bd);
+      background: var(--card-bg);
+      color: var(--fg);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .btn:hover { background: var(--bg); }
+    .btn-primary {
+      background: var(--accent);
+      color: #ffffff;
+      border-color: var(--accent);
+    }
+    .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+    .btn-help {
+      background: var(--warn);
+      color: #ffffff;
+      border-color: var(--warn);
+      width: 100%;
+      padding: 12px;
+      font-size: 1rem;
+    }
+    .btn-help:hover { opacity: 0.9; }
+    .btn-sm { padding: 6px 12px; font-size: 0.85rem; }
+
+    /* Results Grid */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 16px;
+      margin-top: 16px;
+    }
+    .photo-card {
+      background: var(--bg);
+      border: 1px solid var(--bd);
+      border-radius: var(--radius);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      cursor: pointer;
+      transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+    }
+    .photo-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--accent);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    }
+    .photo-emoji {
+      font-size: 2.5rem;
+      text-align: center;
+      margin-bottom: 8px;
+      background: var(--card-bg);
+      border-radius: 8px;
+      padding: 12px 0;
+    }
+    .photo-caption {
+      font-weight: 600;
+      font-size: 0.95rem;
+      margin-bottom: 6px;
+      line-height: 1.3;
+    }
+    .photo-meta {
+      font-size: 0.8rem;
+      color: var(--mut);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 8px;
+    }
+    .tag {
+      font-size: 0.75rem;
+      background: var(--card-bg);
+      border: 1px solid var(--bd);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: var(--mut);
+    }
+
+    /* Recovery Assistant */
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 99px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+    .badge-ok { background: var(--ok-light); color: var(--ok); }
+    .badge-warn { background: var(--warn-light); color: var(--warn); }
+    .badge-accent { background: var(--accent-light); color: var(--accent); }
+
+    .attr-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 10px 0;
+    }
+    .attr-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 0.88rem;
+      border: 1px solid var(--bd);
+    }
+    .attr-understood { background: var(--ok-light); border-color: var(--ok); color: var(--ok); }
+    .attr-missing { background: var(--warn-light); border-color: var(--warn); color: var(--warn); }
+
+    .option-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    /* Banner */
+    .banner {
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: 0.95rem;
+    }
+    .banner-warn { background: var(--warn-light); border: 1px solid var(--warn); color: var(--warn); }
+    .banner-ok { background: var(--ok-light); border: 1px solid var(--ok); color: var(--ok); }
+
+    footer {
+      margin-top: 40px;
+      padding-top: 16px;
+      border-top: 1px solid var(--bd);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      font-size: 0.85rem;
+      color: var(--mut);
+    }
+
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      z-index: 100;
+    }
+    .modal {
+      background: var(--card-bg);
+      border-radius: var(--radius);
+      padding: 24px;
+      max-width: 500px;
+      width: 100%;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>🔍 Search Recovery Assistant</h1>
+      <p class="subtitle">Google Photos Retrieval Graduation Project — Part 5 MVP</p>
+    </header>
+
+    <div id="app"></div>
+
+    <footer>
+      <div>
+        <span>Session Log: <strong id="log-count">0 events</strong></span>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-sm" onclick="exportLog()">📥 Export Session Log</button>
+        <button class="btn btn-sm" onclick="resetSession()">🔄 Reset Session</button>
+      </div>
+    </footer>
+  </main>
+
+  <script>
+    // Fallback embedded metadata if data/metadata.json fetch fails (e.g. file:// protocol)
+    const DEFAULT_METADATA = [
+      {"id":"photo_001","emoji":"🚴","caption":"Cycling along the coast","date":"2023-11-14","location":"Goa","people":["self"],"activity":["cycling"],"objects":["bicycle"],"event":"Goa trip","kind":"photo"},
+      {"id":"photo_002","emoji":"🚴","caption":"Friend cycling in the hills","date":"2022-06-02","location":"Manali","people":["friend"],"activity":["cycling"],"objects":["bicycle"],"event":"Manali trip","kind":"photo"},
+      {"id":"photo_003","emoji":"🚲","caption":"Rental bicycles lined up","date":"2023-11-14","location":"Goa","people":[],"activity":[],"objects":["bicycle"],"event":"Goa trip","kind":"photo"},
+      {"id":"photo_004","emoji":"🚴","caption":"Me cycling near the beach","date":"2023-11-15","location":"Goa","people":["self"],"activity":["cycling"],"objects":["bicycle","beach"],"event":"Goa trip","kind":"photo"},
+      {"id":"photo_005","emoji":"🌅","caption":"Beach sunset","date":"2023-11-14","location":"Goa","people":["friend"],"activity":[],"objects":["beach"],"event":"Goa trip","kind":"photo"},
+      {"id":"photo_006","emoji":"🏛","caption":"Museum entrance","date":"2024-03-02","location":"Kerala","people":[],"activity":["sightseeing"],"objects":["museum"],"event":"Kerala trip","kind":"photo"},
+      {"id":"photo_007","emoji":"🏛","caption":"Inside the museum hall","date":"2024-03-02","location":"Kerala","people":["self"],"activity":["sightseeing"],"objects":["museum"],"event":"Kerala trip","kind":"photo"},
+      {"id":"photo_008","emoji":"🛕","caption":"Temple courtyard","date":"2024-03-03","location":"Kerala","people":[],"activity":["sightseeing"],"objects":["temple"],"event":"Kerala trip","kind":"photo"},
+      {"id":"photo_009","emoji":"🌊","caption":"Lakeside near the museum","date":"2024-03-02","location":"Kerala","people":["self"],"activity":[],"objects":["lake","museum"],"event":"Kerala trip","kind":"photo"},
+      {"id":"photo_010","emoji":"🌊","caption":"Lake view, no landmarks","date":"2024-03-04","location":"Kerala","people":[],"activity":[],"objects":["lake"],"event":"Kerala trip","kind":"photo"},
+      {"id":"photo_011","emoji":"🎓","caption":"College farewell group photo","date":"2021-05-20","location":"Bhopal","people":["self","friend"],"activity":["farewell"],"objects":[],"event":"College farewell","kind":"photo"},
+      {"id":"photo_012","emoji":"🎓","caption":"Classroom group photo","date":"2019-08-10","location":"Bhopal","people":["friend"],"activity":[],"objects":[],"event":"College","kind":"photo"},
+      {"id":"photo_013","emoji":"🎓","caption":"College fest stage","date":"2020-02-15","location":"Bhopal","people":[],"activity":[],"objects":["stage"],"event":"College fest","kind":"photo"},
+      {"id":"photo_014","emoji":"🎓","caption":"Farewell, three friends together","date":"2021-05-20","location":"Bhopal","people":["self","friend"],"activity":["farewell"],"objects":[],"event":"College farewell","kind":"photo"},
+      {"id":"photo_015","emoji":"💦","caption":"Waterfall on a road trip","date":"2023-08-19","location":"Chitrakote","people":["self","friend"],"activity":["road trip"],"objects":["waterfall"],"event":"Road trip","kind":"photo"},
+      {"id":"photo_016","emoji":"💦","caption":"Waterfall close-up, solo trip","date":"2021-09-05","location":"Dudhsagar","people":[],"activity":[],"objects":["waterfall"],"event":"Solo trip","kind":"photo"},
+      {"id":"photo_017","emoji":"💦","caption":"Waterfall selfie","date":"2022-07-22","location":"Kerala","people":["self"],"activity":[],"objects":["waterfall"],"event":"Kerala trip","kind":"photo"},
+      {"id":"photo_018","emoji":"🚗","caption":"Road trip car selfie","date":"2023-08-19","location":"Chitrakote","people":["self","friend"],"activity":["road trip"],"objects":["car"],"event":"Road trip","kind":"photo"},
+      {"id":"photo_019","emoji":"👩","caption":"Mom and me at the fort","date":"2019-12-01","location":"Jaipur","people":["self","mother"],"activity":["sightseeing"],"objects":["fort"],"event":"Family trip","kind":"photo"},
+      {"id":"photo_020","emoji":"👩","caption":"Mom at the beach","date":"2018-05-10","location":"Goa","people":["mother"],"activity":[],"objects":["beach"],"event":"Family trip","kind":"photo"},
+      {"id":"photo_021","emoji":"👩","caption":"Family group at the fort","date":"2019-12-01","location":"Jaipur","people":["mother","friend"],"activity":["sightseeing"],"objects":["fort"],"event":"Family trip","kind":"photo"},
+      {"id":"photo_022","emoji":"🧾","caption":"Payment confirmation screenshot","date":"2026-01-15","location":"","people":[],"activity":[],"objects":["receipt"],"event":"","kind":"screenshot"},
+      {"id":"photo_023","emoji":"🧾","caption":"Bill screenshot","date":"2026-02-02","location":"","people":[],"activity":[],"objects":["receipt"],"event":"","kind":"screenshot"},
+      {"id":"photo_024","emoji":"💍","caption":"Wedding dance, black outfit","date":"2024-11-08","location":"Raipur","people":["self","friend"],"activity":["wedding"],"objects":["black outfit"],"event":"Wedding","kind":"photo"},
+      {"id":"photo_025","emoji":"💍","caption":"Wedding decorations","date":"2024-11-08","location":"Raipur","people":[],"activity":["wedding"],"objects":[],"event":"Wedding","kind":"photo"},
+      {"id":"photo_026","emoji":"🍽","caption":"Dinner with friends","date":"2025-01-20","location":"Delhi","people":["friend"],"activity":["dinner"],"objects":[],"event":"","kind":"photo"}
+    ];
+
+    // Global App State
+    let S = {
+      state: 1, // 1: Input, 2: Initial Results, 3: Recovery Assistant, 4: Refined Results
+      library: [],
+      query: "",
+      taskId: "",
+      startTime: null,
+      clues: null,
+      aiMode: false,
+      anyMatchResults: [],
+      allMatchResults: [],
+      activeFilters: {}, // accumulated constraints for refinement
+      selectedNarrowAttr: null,
+      loopCount: 0,
+      selectedPhoto: null,
+      events: []
+    };
+
+    // Helper: Escaping HTML
+    const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+    // Initialize App & Data
+    async function initApp() {
+      S.taskId = "task_" + Math.random().toString(36).substring(2, 9);
+      try {
+        const res = await fetch('data/metadata.json');
+        if (res.ok) {
+          S.library = await res.json();
+        } else {
+          S.library = DEFAULT_METADATA;
+        }
+      } catch (e) {
+        S.library = DEFAULT_METADATA;
+      }
+      
+      // Load stored logs if any
+      const stored = localStorage.getItem('sr_events');
+      if (stored) {
+        try { S.events = JSON.parse(stored); } catch(e){}
+      }
+      updateLogCount();
+      draw();
+    }
+
+    // Instrumentation Event Logger
+    function logEvent(type, payload = {}) {
+      const evt = {
+        taskId: S.taskId,
+        type,
+        timestamp: new Date().toISOString(),
+        ...payload
+      };
+      S.events.push(evt);
+      localStorage.setItem('sr_events', JSON.stringify(S.events));
+      updateLogCount();
+    }
+
+    function updateLogCount() {
+      const el = document.getElementById('log-count');
+      if (el) el.innerText = `${S.events.length} event(s)`;
+    }
+
+    // AI Call Runtime & Keyword Fallback
+    async function aiExtract(text) {
+      // 1. Try Claude runtime if available
+      try {
+        if (window.claude && typeof window.claude.use === 'function') {
+          const s = await window.claude.use("sample");
+          if (s) {
+            const prompt = `Extract photo retrieval attributes from user query: "${text.replace(/"/g,"'")}". 
+Return JSON only: {"people":[], "activity":[], "objects":[], "location":"", "event":"", "year":"", "kind":""}. 
+Allowed values:
+people: ["self", "friend", "mother"]
+activity: ["cycling", "sightseeing", "farewell", "road trip", "wedding", "dinner"]
+objects: ["bicycle", "beach", "museum", "temple", "lake", "waterfall", "car", "fort", "receipt", "black outfit"]
+location: ["Goa", "Manali", "Kerala", "Bhopal", "Chitrakote", "Dudhsagar", "Jaipur", "Raipur", "Delhi"]
+event: ["Goa trip", "Manali trip", "Kerala trip", "College farewell", "College", "College fest", "Road trip", "Solo trip", "Family trip", "Wedding"]
+year: ["2018","2019","2020","2021","2022","2023","2024","2025","2026"]
+kind: ["photo", "screenshot"]`;
+            const res = await s.json(prompt, { cache: false });
+            if (res && typeof res === 'object') {
+              S.aiMode = true;
+              return res;
+            }
+          }
+        }
+      } catch (e) {}
+
+      // 2. Keyword Fallback
+      S.aiMode = false;
+      return fbClues(text);
+    }
+
+    function fbClues(t) {
+      const txt = t.toLowerCase();
+      const clues = {
+        people: [],
+        activity: [],
+        objects: [],
+        location: "",
+        event: "",
+        year: "",
+        kind: "photo"
+      };
+
+      // People
+      if (/\b(me|myself|i|self)\b/.test(txt)) clues.people.push("self");
+      if (/\b(friend|friends)\b/.test(txt)) clues.people.push("friend");
+      if (/\b(mom|mother|family)\b/.test(txt)) clues.people.push("mother");
+
+      // Activity
+      if (/\b(cycling|riding|bike|bicycling)\b/.test(txt)) clues.activity.push("cycling");
+      if (/\b(sightseeing|tour|visiting|museum|fort)\b/.test(txt)) clues.activity.push("sightseeing");
+      if (/\b(farewell)\b/.test(txt)) clues.activity.push("farewell");
+      if (/\b(road trip|driving|car trip)\b/.test(txt)) clues.activity.push("road trip");
+      if (/\b(wedding|marriage|dance)\b/.test(txt)) clues.activity.push("wedding");
+      if (/\b(dinner|eating|food)\b/.test(txt)) clues.activity.push("dinner");
+
+      // Objects
+      if (/\b(bicycle|bike|cycle|cycling)\b/.test(txt)) clues.objects.push("bicycle");
+      if (/\b(beach|sea|coast|ocean)\b/.test(txt)) clues.objects.push("beach");
+      if (/\b(museum)\b/.test(txt)) clues.objects.push("museum");
+      if (/\b(temple)\b/.test(txt)) clues.objects.push("temple");
+      if (/\b(lake)\b/.test(txt)) clues.objects.push("lake");
+      if (/\b(waterfall|falls)\b/.test(txt)) clues.objects.push("waterfall");
+      if (/\b(car)\b/.test(txt)) clues.objects.push("car");
+      if (/\b(fort)\b/.test(txt)) clues.objects.push("fort");
+      if (/\b(receipt|bill|payment)\b/.test(txt)) { clues.objects.push("receipt"); clues.kind = "screenshot"; }
+      if (/\b(black outfit|black dress)\b/.test(txt)) clues.objects.push("black outfit");
+      if (/\b(screenshot)\b/.test(txt)) clues.kind = "screenshot";
+
+      // Location
+      if (/\bgoa\b/.test(txt)) clues.location = "Goa";
+      else if (/\bmanali\b/.test(txt)) clues.location = "Manali";
+      else if (/\bkerala\b/.test(txt)) clues.location = "Kerala";
+      else if (/\bbhopal\b/.test(txt)) clues.location = "Bhopal";
+      else if (/\bchitrakote\b/.test(txt)) clues.location = "Chitrakote";
+      else if (/\bdudhsagar\b/.test(txt)) clues.location = "Dudhsagar";
+      else if (/\bjaipur\b/.test(txt)) clues.location = "Jaipur";
+      else if (/\braipur\b/.test(txt)) clues.location = "Raipur";
+      else if (/\bdelhi\b/.test(txt)) clues.location = "Delhi";
+
+      // Event
+      if (/\bgoa trip\b/.test(txt)) clues.event = "Goa trip";
+      else if (/\bmanali trip\b/.test(txt)) clues.event = "Manali trip";
+      else if (/\bkerala trip\b/.test(txt)) clues.event = "Kerala trip";
+      else if (/\bcollege farewell\b/.test(txt)) clues.event = "College farewell";
+      else if (/\bcollege fest\b/.test(txt)) clues.event = "College fest";
+      else if (/\bcollege\b/.test(txt)) clues.event = "College";
+      else if (/\broad trip\b/.test(txt)) clues.event = "Road trip";
+      else if (/\bsolo trip\b/.test(txt)) clues.event = "Solo trip";
+      else if (/\bfamily trip\b/.test(txt)) clues.event = "Family trip";
+      else if (/\bwedding\b/.test(txt)) clues.event = "Wedding";
+
+      // Year
+      const yearMatch = txt.match(/\b(2018|2019|2020|2021|2022|2023|2024|2025|2026)\b/);
+      if (yearMatch) clues.year = yearMatch[1];
+
+      return clues;
+    }
+
+    // Deterministic Search Engine (§4 of MVP_SPEC.md)
+    function runSearch(clues, extraFilters = {}) {
+      const combined = { ...clues };
+
+      // Apply extraFilters override/additions
+      for (const [k, v] of Object.entries(extraFilters)) {
+        if (v) {
+          if (Array.isArray(combined[k])) {
+            if (!combined[k].includes(v)) combined[k] = [...combined[k], v];
+          } else {
+            combined[k] = v;
+          }
+        }
+      }
+
+      // Check if we have any active clue values
+      const hasClues = Boolean(
+        (combined.people && combined.people.length) ||
+        (combined.activity && combined.activity.length) ||
+        (combined.objects && combined.objects.length) ||
+        combined.location || combined.event || combined.year ||
+        (combined.kind && combined.kind !== "photo")
+      );
+
+      // ANY-MATCH: matches if item shares ANY extracted attribute value
+      const anyMatch = S.library.filter(item => {
+        if (!hasClues) return true; // If no clues parsed, return all
+        if (combined.people && combined.people.some(p => item.people && item.people.includes(p))) return true;
+        if (combined.activity && combined.activity.some(a => item.activity && item.activity.includes(a))) return true;
+        if (combined.objects && combined.objects.some(o => item.objects && item.objects.includes(o))) return true;
+        if (combined.location && item.location && item.location.toLowerCase() === combined.location.toLowerCase()) return true;
+        if (combined.event && item.event && item.event.toLowerCase() === combined.event.toLowerCase()) return true;
+        if (combined.year && item.date && item.date.startsWith(combined.year)) return true;
+        if (combined.kind && combined.kind === "screenshot" && item.kind === "screenshot") return true;
+        
+        // Substring match fallback against query text if nothing matched
+        if (S.query) {
+          const qWords = S.query.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+          if (qWords.some(w => item.caption.toLowerCase().includes(w))) return true;
+        }
+        return false;
+      });
+
+      // ALL-MATCH: matches only if item satisfies ALL extracted/specified attributes
+      const allMatch = S.library.filter(item => {
+        if (combined.people && combined.people.length > 0) {
+          if (!combined.people.some(p => item.people && item.people.includes(p))) return false;
+        }
+        if (combined.activity && combined.activity.length > 0) {
+          if (!combined.activity.some(a => item.activity && item.activity.includes(a))) return false;
+        }
+        if (combined.objects && combined.objects.length > 0) {
+          if (!combined.objects.some(o => item.objects && item.objects.includes(o))) return false;
+        }
+        if (combined.location) {
+          if (!item.location || item.location.toLowerCase() !== combined.location.toLowerCase()) return false;
+        }
+        if (combined.event) {
+          if (!item.event || item.event.toLowerCase() !== combined.event.toLowerCase()) return false;
+        }
+        if (combined.year) {
+          if (!item.date || !item.date.startsWith(combined.year)) return false;
+        }
+        if (combined.kind && combined.kind === "screenshot") {
+          if (item.kind !== "screenshot") return false;
+        }
+        return true;
+      });
+
+      return { anyMatch, allMatch };
+    }
+
+    // Weak Result Rule Check: anyMatch > 5 OR allMatch == 0
+    function isWeakResult(anyMatch, allMatch) {
+      return anyMatch.length > 5 || allMatch.length === 0;
+    }
+
+    // Action Handlers
+    async function submitSearch(textQuery) {
+      const qText = (textQuery || document.getElementById('query-input')?.value || "").trim();
+      if (!qText) return;
+
+      S.query = qText;
+      S.startTime = Date.now();
+      S.state = 2;
+      S.loopCount = 0;
+      S.activeFilters = {};
+      S.selectedNarrowAttr = null;
+      S.selectedPhoto = null;
+
+      logEvent("task_started", { query_text: S.query });
+
+      // Extract Clues
+      S.clues = await aiExtract(S.query);
+      logEvent("clues_extracted", { attributes: S.clues, mode: S.aiMode ? "ai" : "fallback" });
+
+      // Search
+      const { anyMatch, allMatch } = runSearch(S.clues);
+      S.anyMatchResults = anyMatch;
+      S.allMatchResults = allMatch;
+
+      const weak = isWeakResult(anyMatch, allMatch);
+      logEvent("initial_results", {
+        count: anyMatch.length,
+        all_count: allMatch.length,
+        is_weak: weak
+      });
+
+      draw();
+    }
+
+    function presetSearch(text) {
+      submitSearch(text);
+    }
+
+    function openRecoveryAssistant() {
+      S.state = 3;
+      S.selectedNarrowAttr = null;
+
+      // Identify missing attribute types
+      const missing = [];
+      if (!S.clues.people || !S.clues.people.length) missing.push("people");
+      if (!S.clues.location) missing.push("location");
+      if (!S.clues.year) missing.push("time");
+      if (!S.clues.event) missing.push("event");
+      if (!S.clues.activity || !S.clues.activity.length) missing.push("activity");
+      if (!S.clues.objects || !S.clues.objects.length) missing.push("objects");
+
+      // Viable narrowing options (attributes with > 1 distinct value in anyMatchResults)
+      const viable = getViableAttributes(S.anyMatchResults);
+
+      logEvent("recovery_shown", {
+        missing_attributes: missing,
+        viable_attributes: viable
+      });
+
+      draw();
+    }
+
+    function getViableAttributes(items) {
+      const attrValues = {
+        location: new Set(),
+        year: new Set(),
+        people: new Set(),
+        activity: new Set(),
+        event: new Set(),
+        objects: new Set(),
+        kind: new Set()
+      };
+
+      items.forEach(item => {
+        if (item.location) attrValues.location.add(item.location);
+        if (item.date) attrValues.year.add(item.date.substring(0,4));
+        if (item.event) attrValues.event.add(item.event);
+        if (item.kind) attrValues.kind.add(item.kind);
+        (item.people || []).forEach(p => attrValues.people.add(p));
+        (item.activity || []).forEach(a => attrValues.activity.add(a));
+        (item.objects || []).forEach(o => attrValues.objects.add(o));
+      });
+
+      const viable = [];
+      for (const [attr, valSet] of Object.entries(attrValues)) {
+        if (valSet.size > 1) {
+          viable.push({ attr, values: Array.from(valSet) });
+        }
+      }
+      return viable;
+    }
+
+    function selectNarrowAttr(attrName) {
+      S.selectedNarrowAttr = attrName;
+      logEvent("recovery_option_selected", { attribute: attrName });
+      draw();
+    }
+
+    function applyRefinedFilter(attr, val) {
+      S.activeFilters[attr] = val;
+      S.loopCount++;
+      S.state = 4;
+
+      // Re-run search with active filters
+      const { anyMatch, allMatch } = runSearch(S.clues, S.activeFilters);
+      S.anyMatchResults = anyMatch;
+      S.allMatchResults = allMatch;
+
+      logEvent("refined_results", {
+        attribute: attr,
+        value: val,
+        count: allMatch.length > 0 ? allMatch.length : anyMatch.length,
+        loop_count: S.loopCount
+      });
+
+      draw();
+    }
+
+    function selectPhoto(photo) {
+      S.selectedPhoto = photo;
+      const timeMs = Date.now() - (S.startTime || Date.now());
+      logEvent("task_completed", {
+        photo_id: photo.id,
+        caption: photo.caption,
+        total_steps: S.loopCount + 1,
+        time_ms: timeMs
+      });
+      draw();
+    }
+
+    function restartSearch(reason = "user_restart") {
+      logEvent("task_abandoned", { reason });
+      S.state = 1;
+      S.query = "";
+      S.clues = null;
+      S.anyMatchResults = [];
+      S.allMatchResults = [];
+      S.activeFilters = {};
+      S.loopCount = 0;
+      S.selectedPhoto = null;
+      S.taskId = "task_" + Math.random().toString(36).substring(2, 9);
+      draw();
+    }
+
+    function resetSession() {
+      if (confirm("Reset all stored session logs and restart?")) {
+        S.events = [];
+        localStorage.removeItem('sr_events');
+        restartSearch("session_reset");
+      }
+    }
+
+    function exportLog() {
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(S.events, null, 2));
+      const anchor = document.createElement('a');
+      anchor.setAttribute("href", dataStr);
+      anchor.setAttribute("download", `search_recovery_session_${new Date().toISOString().slice(0,10)}.json`);
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+
+      // Also copy to clipboard
+      try {
+        navigator.clipboard.writeText(JSON.stringify(S.events, null, 2));
+        alert("Session log exported as JSON and copied to clipboard!");
+      } catch (e) {
+        alert("Session log exported as JSON file!");
+      }
+    }
+
+    // UI RENDERER (draw)
+    function draw() {
+      const app = document.getElementById('app');
+      if (!app) return;
+
+      let html = "";
+
+      // Success Modal if Photo Selected
+      if (S.selectedPhoto) {
+        html += `
+          <div class="modal-overlay">
+            <div class="modal">
+              <div style="font-size: 3rem; text-align:center;">🎉</div>
+              <h2 style="text-align:center; margin: 8px 0 16px;">Photo Successfully Retrieved!</h2>
+              <div class="photo-card" style="cursor:default; margin-bottom:16px;">
+                <div class="photo-emoji">${S.selectedPhoto.emoji}</div>
+                <div class="photo-caption">${esc(S.selectedPhoto.caption)}</div>
+                <div class="photo-meta">
+                  <span>📅 ${esc(S.selectedPhoto.date)}</span>
+                  <span>📍 ${esc(S.selectedPhoto.location || "N/A")} (${esc(S.selectedPhoto.event || "No event")})</span>
+                </div>
+              </div>
+              <p class="subtitle" style="text-align:center;">Task completed in ${S.loopCount + 1} step(s). Session logged for analysis.</p>
+              <div style="display:flex; justify-content:center; gap:8px; margin-top:20px;">
+                <button class="btn btn-primary" onclick="restartSearch('new_task')">Try Another Retrieval</button>
+                <button class="btn" onclick="exportLog()">Export Log</button>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      // STATE 1: Retrieval Input
+      if (S.state === 1) {
+        html += `
+          <div class="card">
+            <h2>1. Express your memory</h2>
+            <p class="subtitle">Describe a photo you half-remember. The assistant will extract your clues and search the library.</p>
+            <div class="search-box">
+              <textarea id="query-input" placeholder="e.g. That photo of me riding a bicycle during my Goa trip">${esc(S.query)}</textarea>
+              <div class="preset-chips">
+                <span class="chip-label">Try test scenarios:</span>
+                <span class="chip" onclick="presetSearch('Me riding a bicycle during my Goa trip')">🚴 Goa bicycle</span>
+                <span class="chip" onclick="presetSearch('Inside museum hall during Kerala trip')">🏛 Kerala museum</span>
+                <span class="chip" onclick="presetSearch('College farewell group photo in Bhopal')">🎓 College farewell</span>
+                <span class="chip" onclick="presetSearch('Waterfall selfie on trip')">💦 Waterfall</span>
+                <span class="chip" onclick="presetSearch('Mom and me at Jaipur fort')">👩 Mom at fort</span>
+                <span class="chip" onclick="presetSearch('Payment confirmation receipt screenshot')">🧾 Receipt screenshot</span>
+              </div>
+              <div style="margin-top:8px;">
+                <button class="btn btn-primary" onclick="submitSearch()">Find Photo →</button>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      // STATE 2: Results & Weak Result Banner
+      else if (S.state === 2) {
+        const anyCount = S.anyMatchResults.length;
+        const allCount = S.allMatchResults.length;
+        const weak = isWeakResult(S.anyMatchResults, S.allMatchResults);
+
+        html += `
+          <div class="card">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+              <div>
+                <h2>Query Results</h2>
+                <p class="subtitle">" ${esc(S.query)} "</p>
+              </div>
+              <div>
+                <span class="badge ${S.aiMode ? 'badge-ok' : 'badge-accent'}">
+                  ${S.aiMode ? '✨ AI Clues' : '⚙️ Keyword Clues'}
+                </span>
+                <button class="btn btn-sm" onclick="restartSearch('change_query')">New Search</button>
+              </div>
+            </div>
+
+            <!-- Clue Badges -->
+            <div class="attr-list">
+              ${S.clues.people && S.clues.people.length ? `<span class="attr-item attr-understood">✓ People: ${esc(S.clues.people.join(", "))}</span>` : ''}
+              ${S.clues.activity && S.clues.activity.length ? `<span class="attr-item attr-understood">✓ Activity: ${esc(S.clues.activity.join(", "))}</span>` : ''}
+              ${S.clues.location ? `<span class="attr-item attr-understood">✓ Location: ${esc(S.clues.location)}</span>` : ''}
+              ${S.clues.event ? `<span class="attr-item attr-understood">✓ Event: ${esc(S.clues.event)}</span>` : ''}
+              ${S.clues.objects && S.clues.objects.length ? `<span class="attr-item attr-understood">✓ Objects: ${esc(S.clues.objects.join(", "))}</span>` : ''}
+              ${S.clues.year ? `<span class="attr-item attr-understood">✓ Year: ${esc(S.clues.year)}</span>` : ''}
+            </div>
+
+            ${weak ? `
+              <div class="banner banner-warn">
+                <strong>⚠️ Results are broad or noisy (${anyCount} items match your clues).</strong>
+                <p style="margin:4px 0 12px; font-size:0.9rem;">Nothing points directly to why this result was broad or what to try next.</p>
+                <button class="btn btn-help" onclick="openRecoveryAssistant()">✨ Help me find it (Recovery Assistant)</button>
+              </div>
+            ` : `
+              <div class="banner banner-ok">
+                <strong>✅ Narrowed match (${anyCount} item(s) found).</strong> Tap your photo below to complete retrieval.
+              </div>
+            `}
+          </div>
+
+          <h3>Matching Photos (${anyCount})</h3>
+          <p class="subtitle">Tap the photo you were looking for:</p>
+          <div class="grid">
+            ${S.anyMatchResults.map(item => renderPhotoCard(item)).join('')}
+          </div>
+        `;
+      }
+
+      // STATE 3: Recovery Assistant
+      else if (S.state === 3) {
+        const viable = getViableAttributes(S.anyMatchResults);
+
+        // Clue analysis for display
+        const understood = [];
+        if (S.clues.people && S.clues.people.length) understood.push(`People: ${S.clues.people.join(", ")}`);
+        if (S.clues.activity && S.clues.activity.length) understood.push(`Activity: ${S.clues.activity.join(", ")}`);
+        if (S.clues.location) understood.push(`Location: ${S.clues.location}`);
+        if (S.clues.event) understood.push(`Event: ${S.clues.event}`);
+        if (S.clues.objects && S.clues.objects.length) understood.push(`Objects: ${S.clues.objects.join(", ")}`);
+        if (S.clues.year) understood.push(`Year: ${S.clues.year}`);
+
+        const missing = [];
+        if (!S.clues.people || !S.clues.people.length) missing.push("People (who was with you)");
+        if (!S.clues.location) missing.push("Location / City");
+        if (!S.clues.year) missing.push("Time / Year");
+        if (!S.clues.event) missing.push("Event name");
+        if (!S.clues.activity || !S.clues.activity.length) missing.push("Activity");
+
+        html += `
+          <div class="card">
+            <h2>✨ Recovery Assistant</h2>
+            <p class="subtitle">The search returned ${S.anyMatchResults.length} photos because your memory contained broad or multi-attribute clues.</p>
+
+            <div style="margin: 16px 0;">
+              <h4 style="margin:0 0 6px;">I understood:</h4>
+              <div class="attr-list">
+                ${understood.length > 0 ? understood.map(u => `<span class="attr-item attr-understood">✓ ${esc(u)}</span>`).join('') : '<span class="subtitle">General keywords</span>'}
+              </div>
+            </div>
+
+            <div style="margin: 16px 0;">
+              <h4 style="margin:0 0 6px;">I couldn't narrow down:</h4>
+              <div class="attr-list">
+                ${missing.length > 0 ? missing.map(m => `<span class="attr-item attr-missing">? ${esc(m)}</span>`).join('') : '<span class="subtitle">No obvious missing category</span>'}
+              </div>
+            </div>
+
+            <hr style="border:0; border-top:1px solid var(--bd); margin:16px 0;">
+
+            <h3>Narrow your search by:</h3>
+            <p class="subtitle">Select an attribute present in these ${S.anyMatchResults.length} photos to filter down:</p>
+
+            <div class="option-group">
+              ${viable.map(v => `
+                <button class="btn ${S.selectedNarrowAttr === v.attr ? 'btn-primary' : ''}" onclick="selectNarrowAttr('${v.attr}')">
+                  Narrow by ${v.attr.toUpperCase()} (${v.values.length} options)
+                </button>
+              `).join('')}
+              <button class="btn" onclick="restartSearch('describe_else')">Describe something else</button>
+            </div>
+
+            <!-- Sub-selection of attribute values -->
+            ${S.selectedNarrowAttr ? renderAttributeValuePicker(S.selectedNarrowAttr, viable) : ''}
+          </div>
+
+          <h3>Current Candidate Photos (${S.anyMatchResults.length})</h3>
+          <div class="grid">
+            ${S.anyMatchResults.map(item => renderPhotoCard(item)).join('')}
+          </div>
+        `;
+      }
+
+      // STATE 4: Refined Results
+      else if (S.state === 4) {
+        const displayItems = S.allMatchResults.length > 0 ? S.allMatchResults : S.anyMatchResults;
+        const stillWeak = isWeakResult(displayItems, S.allMatchResults);
+        const activeFilterStr = Object.entries(S.activeFilters).map(([k,v]) => `${k}: ${v}`).join(", ");
+
+        html += `
+          <div class="card">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <div>
+                <h2>Refined Results (Loop ${S.loopCount}/3)</h2>
+                <p class="subtitle">Filters applied: <strong>${esc(activeFilterStr)}</strong></p>
+              </div>
+              <button class="btn btn-sm" onclick="restartSearch('restart_refined')">Start Over</button>
+            </div>
+
+            ${stillWeak && S.loopCount < 3 ? `
+              <div class="banner banner-warn" style="margin-top:12px;">
+                <strong>⚠️ Results are still broad (${displayItems.length} photos remain).</strong>
+                <p style="margin:4px 0 12px; font-size:0.9rem;">You can narrow down further using another attribute.</p>
+                <button class="btn btn-help" onclick="openRecoveryAssistant()">✨ Narrow further (Recovery Loop ${S.loopCount + 1})</button>
+              </div>
+            ` : S.loopCount >= 3 && stillWeak ? `
+              <div class="banner banner-warn" style="margin-top:12px;">
+                <strong>Reached maximum 3 recovery loops.</strong> Please select the target photo below or describe your memory with different keywords.
+              </div>
+            ` : `
+              <div class="banner banner-ok" style="margin-top:12px;">
+                <strong>🎉 Refinement successful! (${displayItems.length} photo(s) remaining).</strong> Tap your target photo below.
+              </div>
+            `}
+          </div>
+
+          <h3>Matching Photos (${displayItems.length})</h3>
+          <div class="grid">
+            ${displayItems.map(item => renderPhotoCard(item)).join('')}
+          </div>
+        `;
+      }
+
+      app.innerHTML = html;
+    }
+
+    // Render helper for single photo card
+    function renderPhotoCard(item) {
+      return `
+        <div class="photo-card" onclick="selectPhoto(${esc(JSON.stringify(item))})">
+          <div class="photo-emoji">${item.emoji || '🖼️'}</div>
+          <div>
+            <div class="photo-caption">${esc(item.caption)}</div>
+            <div class="photo-meta">
+              <span>📅 ${esc(item.date)}</span>
+              ${item.location ? `<span>📍 ${esc(item.location)}</span>` : ''}
+              ${item.event ? `<span>🎉 ${esc(item.event)}</span>` : ''}
+            </div>
+            <div class="tags">
+              ${(item.people || []).map(p => `<span class="tag">👤 ${esc(p)}</span>`).join('')}
+              ${(item.activity || []).map(a => `<span class="tag">🚴 ${esc(a)}</span>`).join('')}
+              ${(item.objects || []).map(o => `<span class="tag">📦 ${esc(o)}</span>`).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // Render helper for picking values of selected attribute in State 3
+    function renderAttributeValuePicker(attr, viableList) {
+      const found = viableList.find(v => v.attr === attr);
+      if (!found) return "";
+
+      return `
+        <div style="background:var(--bg); border:1px solid var(--bd); border-radius:8px; padding:16px; margin-top:16px;">
+          <h4 style="margin:0 0 8px;">Select a ${attr.toUpperCase()} to filter by:</h4>
+          <div class="option-group">
+            ${found.values.map(val => `
+              <button class="btn btn-primary" onclick="applyRefinedFilter('${attr}', '${esc(val)}')">
+                ${esc(val)}
+              </button>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    // Initialize on load
+    window.addEventListener('DOMContentLoaded', initApp);
+  </script>
+</body>
+</html>

@@ -47,22 +47,30 @@ its date.
 
 ## 4. What the MVP does, and why it's built this way
 
-The MVP is a **recovery workflow that sits alongside the user's real Google
-Photos** — it does not search photos itself and has no access to anyone's
-library. That's a deliberate scope decision, not a shortcut:
+**ARCHITECTURE UPDATE — read this before touching code.** An earlier version
+of this MVP had the user manually search their own real Google Photos while
+this app only gave suggestions. That approach has been **replaced**. The
+current, authoritative spec is `MVP_SPEC.md` in this same folder — read it in
+full before writing any code. Summary:
 
-1. User describes a half-remembered photo in plain language.
-2. The app extracts structured clues (people / activity / place / context /
-   time / visible text) and gives an exact first query to type into Google
-   Photos.
-3. User tries it in their own Photos app and reports one outcome: too many
-   results, wrong people/things, nothing, can't tell which, or found it.
-4. On a miss, the app diagnoses why and suggests up to 3 different next
-   steps, each naming where to go (Search bar / People & pets / a category /
-   Timeline) and what to try — never repeating an earlier query.
-5. Repeats until found. A session log (memory, clues understood, every
-   attempt, and steps-to-recovery) is shown at the end for the user to copy
-   to the researcher.
+The MVP now runs against a **local simulated photo library**
+(`data/metadata.json`, ~25-30 items with structured metadata) so that any
+reviewer can attempt a full retrieval task with zero setup — no Google
+account or personal photo library needed. This directly satisfies the
+brief's requirement that "another person can use it to attempt a retrieval
+task."
+
+1. User describes a half-remembered photo in plain language (State 1).
+2. AI extracts structured clues and the app runs a deterministic any-match
+   search against `metadata.json` (State 2 — results).
+3. If results are broad or empty (the "weak-result rule" in MVP_SPEC.md
+   §4), a Recovery Assistant appears: what was understood, what's missing,
+   and next-step options to narrow by a specific attribute (State 3).
+4. Selecting a narrowing option re-runs the search with that constraint
+   added (State 4 — refined results), looping back to State 3 if still weak
+   (capped at 3 loops).
+5. Every step is logged as an instrumentation event (see MVP_SPEC.md §6) and
+   exportable as a JSON session log for Part 6 testing evidence.
 
 **Intelligence is deliberately scoped to two of the four gates only:**
 - **Understand** — turning a natural-language, multi-attribute memory into
@@ -81,12 +89,14 @@ evidence-to-build story on the deck.
 
 ```
 /
-├── index.html          # The entire MVP — single self-contained file.
-│                        # No build step, no external dependencies except
-│                        # the runtime AI call described below.
+├── index.html          # The entire MVP — single self-contained frontend.
+│                        # No build step, no framework.
+├── data/
+│   └── metadata.json    # Simulated photo library — see MVP_SPEC.md §3
 ├── README.md            # Public-facing repo description
-└── PROJECT_CONTEXT.md    # This file — for agent/developer context only,
-                           # not meant for end users
+├── PROJECT_CONTEXT.md    # This file
+└── MVP_SPEC.md           # Authoritative product + technical spec —
+                           # read this in full before building
 ```
 
 `index.html` is intentionally a single flat file (vanilla HTML/CSS/JS, no
@@ -110,21 +120,22 @@ needs to "just work" when a reviewer opens it.
 ## 6. Important constraint: two deployment targets, different capabilities
 
 This MVP is meant to exist at **two links**, and they behave differently on
-purpose:
+purpose — this still applies to the new architecture:
 
-1. **Claude artifact** (canonical, full-featured):
-   https://claude.ai/artifact/YQPBb4RgFQV3bTXNTtzEet
-   — AI clue-reading and next-step diagnosis work here via the in-artifact
-   `window.claude` runtime.
-2. **GitHub Pages** (this repo, code-visible for reviewers):
-   — same file, but the AI runtime isn't present, so it automatically runs
-   in keyword-fallback mode. This is a known, accepted limitation — do not
-   try to wire up a real API key or backend for this deployment. Adding a
-   real LLM API call here would require a server to hold the key safely,
-   which is out of scope for this deliverable.
+1. **Claude artifact** (canonical, full-featured): AI clue extraction (spec
+   §7) works here via the in-artifact `window.claude` runtime.
+2. **GitHub Pages** (this repo, code-visible for reviewers): same file, but
+   the AI runtime isn't present, so clue extraction automatically runs in a
+   keyword-matching fallback mode instead. This is expected, not a bug — do
+   not wire up a real API key or backend here; that's out of scope.
 
-When deploying with GitHub Pages: just serve `index.html` as a static file
-from the repo root, branch `main`. No build process needed.
+The deterministic retrieval engine (spec §4) and the whole 4-state UI work
+identically on both deployments regardless of AI availability — only the
+quality of clue extraction from free text differs.
+
+When deploying with GitHub Pages: serve `index.html` (and the `data/`
+folder alongside it) as static files from the repo root, branch `main`. No
+build process needed.
 
 ## 7. Things not to do without checking first
 
